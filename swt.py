@@ -2,6 +2,7 @@
 
 import cv2
 import glob
+import math
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -29,17 +30,51 @@ class stroke_width_transform():
         canny_threshold_low = 32
         canny_threshold_high = 256
         edges = cv2.Canny(gray_image, canny_threshold_low, canny_threshold_high)
+        edge_coordinates = np.transpose(np.nonzero(edges))
 
         # get gradients[rad](sobel_filter_size is temporary)
         sobel_filter_size = -1
         dx = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, sobel_filter_size)
         dy = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, sobel_filter_size)
-        angles = np.arctan2(dy, dx)
+        ex = dx / np.sqrt(dx ** 2 + dy ** 2)
+        ey = dy / np.sqrt(dx ** 2 + dy ** 2)
+        directions = np.arctan2(dy, dx)
 
         # initialize SWT
         swt = np.zeros(image_shape)
         swt.fill(np.infty)
 
+        # print([639, 461] in edge_coordinates)
+        # """
+        # x:horizontal, y: vertical
+        rays = []
+        for y, x in edge_coordinates:
+            ray = []
+            ray.append([y, x])
+            curr_x, curr_y, i = x, y, 0
+            curr_ex, curr_ey = ex[y][x], ey[y][x]
+            while True:
+                i += 1
+                next_x = math.floor(x + curr_ex * i)
+                next_y = math.floor(y + curr_ey * i)
+
+                if next_x != curr_x or next_y != curr_y:
+                    # we have moved to the next pixel!
+                    try:
+                        ray.append((next_x, next_y))
+                        # edgeかつ法線ベクトルのなす角が  between frac{5}{6}\pi and frac{7}{6}\pi
+                        if [next_y, next_x] in edge_coordinates \
+                                and curr_ex * ex[next_y][next_x] + curr_ex * ey[next_y][next_x] < -math.sqrt(3) / 2.0:
+                            thickness = math.sqrt((next_x - x) * (next_x - x) + (next_y - y) * (next_y - y))
+                            for (rp_x, rp_y) in ray:
+                               swt[rp_y, rp_x] = min(thickness, swt[rp_y, rp_x])
+                            break
+                    except IndexError:
+                        # reached image boundary
+                        break
+                    curr_x = next_x
+                    curr_y = next_y
+            # """
         return swt
 
 
