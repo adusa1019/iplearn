@@ -3,7 +3,6 @@
 import cv2
 import glob
 import math
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 import sys
@@ -23,6 +22,7 @@ class stroke_width_transform():
 
     def calculate_stroke_width_transform(self, image):
         # assumption: image given is BGR
+        print(np.shape(image))
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         image_shape = np.shape(gray_image)
 
@@ -63,9 +63,10 @@ class stroke_width_transform():
                     try:
                         ray.append((next_x, next_y))
                         # edgeかつ法線ベクトルのなす角が  between frac{5}{6}\pi and frac{7}{6}\pi
-                        if [next_y, next_x] in edge_coordinates \
-                                and curr_ex * ex[next_y][next_x] + curr_ex * ey[next_y][next_x] < -math.sqrt(3) / 2.0:
+                        if [next_y, next_x] in edge_coordinates and np.dot(np.array([curr_ex, curr_ey]),
+                                np.array([ex[next_y][next_x], ey[next_y][next_x]])) < -math.sqrt(3) / 2.0:
                             thickness = math.sqrt((next_x - x) * (next_x - x) + (next_y - y) * (next_y - y))
+                            print(ray)
                             for (rp_x, rp_y) in ray:
                                swt[rp_y, rp_x] = min(thickness, swt[rp_y, rp_x])
                             break
@@ -79,7 +80,6 @@ class stroke_width_transform():
 
 
 if __name__ == '__main__':
-    path = glob.glob('C:/Users/mueda/PycharmProjects/StrokeWidthTransform/test/images/*.jpg')
-    img = cv2.imread(path[0], 1)
+    img = cv2.imread("036.jpg", 1)
     tmp = stroke_width_transform()
     tmp.run(img)
