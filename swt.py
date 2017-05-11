@@ -30,6 +30,7 @@ class stroke_width_transform():
             for r, c in component:
                 chars[r, c] = image[r, c]
         cv2.imshow("chars", chars)
+        cv2.imwrite("chars.jpg", chars)
         cv2.waitKey(0)
         # 3. Grouping Letters into Text Lines
         pass
