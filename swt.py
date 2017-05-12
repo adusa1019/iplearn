@@ -12,10 +12,8 @@ class stroke_width_transform():
         pass
 
     def run(self, image):
-        cv2.imshow("image", image)
         # 1. The Stroke Width Transform
         swt, edge = self.calculate_stroke_width_transform(image)
-        cv2.imshow("swt", swt)
         # 2. Finding Letter Candidates
         connect_components = self.connect_components(swt)
         mask_components = self.find_letters(swt, connect_components)
@@ -29,8 +27,12 @@ class stroke_width_transform():
         for component in mask_components:
             for r, c in component:
                 chars[r, c] = image[r, c]
-        cv2.imshow("chars", chars)
+        cv2.imwrite("original.jpg", image)
+        cv2.imwrite("edge.jpg", edge)
         cv2.imwrite("chars.jpg", chars)
+        cv2.imshow("image", image)
+        cv2.imshow("edge", edge)
+        cv2.imshow("chars", chars)
         cv2.waitKey(0)
         # 3. Grouping Letters into Text Lines
         pass
@@ -143,6 +145,7 @@ class stroke_width_transform():
                 return ray
         return None
 
+    # ToDo:Tooooooooo kate
     def connect_components(self, swt):
         start = time.time()
         swt_coordinates = np.transpose(swt.nonzero())
@@ -225,99 +228,3 @@ if __name__ == '__main__':
     img = cv2.imread("036.jpg", 1)
     tmp = stroke_width_transform()
     tmp.run(img)
-
-
-class SWTScrubber(object):
-    @classmethod
-    def scrub(cls, filepath):
-        """
-        Apply Stroke-Width Transform to image.
-
-        :param filepath: relative or absolute filepath to source image
-        :return: numpy array representing result of transform
-        """
-        canny, sobelx, sobely, theta = cls._create_derivative(filepath)
-        swt = cls._swt(theta, canny, sobelx, sobely)
-        shapes = cls._connect_components(swt)
-        swts, heights, widths, topleft_pts, images = cls._find_letters(swt, shapes)
-        word_images = cls._find_words(swts, heights, widths, topleft_pts, images)
-
-        final_mask = np.zeros(swt.shape)
-        for word in word_images:
-            final_mask += word
-        return final_mask
-
-    @classmethod
-    def _find_words(cls, swts, heights, widths, topleft_pts, images):
-        # Find all shape pairs that have similar median stroke widths
-        print('SWTS')
-        print(swts)
-        print('DONESWTS')
-        swt_tree = scipy.spatial.KDTree(np.asarray(swts))
-        stp = swt_tree.query_pairs(1)
-
-        # Find all shape pairs that have similar heights
-        height_tree = scipy.spatial.KDTree(np.asarray(heights))
-        htp = height_tree.query_pairs(1)
-
-        # Intersection of valid pairings
-        isect = htp.intersection(stp)
-
-        chains = []
-        pairs = []
-        pair_angles = []
-        for pair in isect:
-            left = pair[0]
-            right = pair[1]
-            widest = max(widths[left], widths[right])
-            distance = np.linalg.norm(topleft_pts[left] - topleft_pts[right])
-            if distance < widest * 3:
-                delta_yx = topleft_pts[left] - topleft_pts[right]
-                angle = np.arctan2(delta_yx[0], delta_yx[1])
-                if angle < 0:
-                    angle += np.pi
-
-                pairs.append(pair)
-                pair_angles.append(np.asarray([angle]))
-
-        angle_tree = scipy.spatial.KDTree(np.asarray(pair_angles))
-        atp = angle_tree.query_pairs(np.pi / 12)
-
-        for pair_idx in atp:
-            pair_a = pairs[pair_idx[0]]
-            pair_b = pairs[pair_idx[1]]
-            left_a = pair_a[0]
-            right_a = pair_a[1]
-            left_b = pair_b[0]
-            right_b = pair_b[1]
-
-            # @todo - this is O(n^2) or similar, extremely naive. Use a search tree.
-            added = False
-            for chain in chains:
-                if left_a in chain:
-                    chain.add(right_a)
-                    added = True
-                elif right_a in chain:
-                    chain.add(left_a)
-                    added = True
-            if not added:
-                chains.append(set([left_a, right_a]))
-            added = False
-            for chain in chains:
-                if left_b in chain:
-                    chain.add(right_b)
-                    added = True
-                elif right_b in chain:
-                    chain.add(left_b)
-                    added = True
-            if not added:
-                chains.append(set([left_b, right_b]))
-
-        word_images = []
-        for chain in [c for c in chains if len(c) > 3]:
-            for idx in chain:
-                word_images.append(images[idx])
-                # cv2.imwrite('keeper'+ str(idx) +'.jpg', images[idx] * 255)
-                # final += images[idx]
-
-        return word_images
