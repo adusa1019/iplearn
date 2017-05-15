@@ -3,7 +3,7 @@
 import cv2
 import math
 import numpy as np
-import scipy
+from sklearn import neighbors
 import time
 
 
@@ -16,26 +16,10 @@ class stroke_width_transform():
         swt, edge = self.calculate_stroke_width_transform(image)
         # 2. Finding Letter Candidates
         connect_components = self.connect_components(swt)
-        mask_components = self.find_letters(swt, connect_components)
-        # for component in mask_components:
-        #     mask = np.zeros(shape=swt.shape)
-        #     for r, c in component:
-        #         mask[r, c] = 255
-        #     cv2.imshow("masked", np.array([mask, mask, mask]).transpose((1, 2, 0)) * image)
-        #     cv2.waitKey(0)
-        chars = np.zeros(shape=image.shape, dtype=np.uint8)
-        for component in mask_components:
-            for r, c in component:
-                chars[r, c] = image[r, c]
-        cv2.imwrite("original.jpg", image)
-        cv2.imwrite("edge.jpg", edge)
-        cv2.imwrite("chars.jpg", chars)
-        cv2.imshow("image", image)
-        cv2.imshow("edge", edge)
-        cv2.imshow("chars", chars)
-        cv2.waitKey(0)
+        swts, heights, widths, topleft_pts, images = self.find_letters(swt, connect_components)
         # 3. Grouping Letters into Text Lines
-        pass
+        word_images = self.find_words(swts, heights, widths, topleft_pts, images)
+        return edge, word_images
 
     @staticmethod
     def get_derivative(image, low=100, high=300):
@@ -43,74 +27,37 @@ class stroke_width_transform():
         edge = cv2.Canny(image, low, high)
         dx = cv2.Sobel(image, cv2.CV_64F, 1, 0, sobel_filter_size)
         dy = cv2.Sobel(image, cv2.CV_64F, 0, 1, sobel_filter_size)
-        return edge, dx, dy, np.arctan2(dy, dx) * edge / np.max(edge)
+        return edge, np.arctan2(dy, dx) * edge / np.max(edge)
 
     @staticmethod
     def is_valid_index(shape, x, y):
         return 0 <= y < shape[0] and 0 <= x < shape[1]
 
-    def calculate_stroke_width_transform(self, image, direction=1):
-        if image.ndim == 2:
-            gray_image = image
-        else:
+    def calculate_stroke_width_transform(self, image, edge=None, theta=None, direction=1):
+        if image.ndim == 3:
             gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray_image = image
 
         # get image edge(threshold values are temporary)
-        edge, dx, dy, theta = self.get_derivative(gray_image)
-        edge_coordinates = [(r, c) for r, c in np.transpose(edge.nonzero())]
-        ex, ey = np.cos(theta), np.sin(theta)
+        if edge is None and theta is None:
+            edge, theta = self.get_derivative(gray_image)
+        edge_coordinates = np.transpose(edge.nonzero())
 
         # initialize SWT
         swt = np.empty(gray_image.shape)
         swt.fill(np.infty)
-
         # x:horizontal, y: vertical
         start = time.time()
         rays = []
-        test = False
-        if test:
-            for y, x in edge_coordinates:
-                ray = self.cast_ray(y, x, theta, edge)
-                if ray:
-                    rays.append(ray)
-        else:
-            for y, x in edge_coordinates:
-                ray = []
-                curr_x, curr_y = x, y
-                base_ex, base_ey = ex[y][x], ey[y][x]
-
-                ray.append([y, x])
-                # print("orig theta: %f" % theta[y, x])
-
-                # for i in range(max(image_shape) * 2):
-                for i in range(1, 25):
-                    next_x = math.floor(x - base_ex * i * direction)
-                    next_y = math.floor(y - base_ey * i * direction)
-
-                    # current pixel == the next pixel
-                    if next_x == curr_x and next_y == curr_y:
-                        continue
-                    # the next pixel is image boundary
-                    if not self.is_valid_index(gray_image.shape, next_x, next_y):
-                        break
-
-                    ray.append([next_y, next_x])
-                    curr_x, curr_y = next_x, next_y
-                    # (next_y, next_x) not in edge_coordinates
-                    if edge[next_y][next_x] == 0:
-                        continue
-                    epsilon = 0.5
-                    if np.dot([base_ey, base_ex], [ey[next_y][next_x], ex[next_y][next_x]]) > -1 + epsilon:
-                        continue
-
-                    # print("opposite theta: %f" % theta[next_y, next_x])
-                    # print("length: %d" % i)
-                    rays.append(ray)
-                    break
+        stroke_widths = []
+        for y, x in edge_coordinates:
+            ray, stroke_width = self.cast_ray(x, y, theta, edge)
+            if ray:
+                rays.append(ray)
+                stroke_widths.append(stroke_width)
         # first time
-        for ray in rays:
-            stroke_width = math.floor(
-                np.linalg.norm(np.array([ray[0][0], ray[0][1]]) - np.array([ray[-1][0], ray[-1][1]])))
+        for ray, stroke_width in zip(rays, stroke_widths):
             for r_y, r_x in ray:
                 swt[r_y, r_x] = min(stroke_width, swt[r_y, r_x])
         # second time
@@ -118,34 +65,34 @@ class stroke_width_transform():
             median = np.median([swt[r_y][r_x] for r_y, r_x in ray])
             for r_y, r_x in ray:
                 swt[r_y, r_x] = min(median, swt[r_y, r_x])
-
+                # swt[r_y, r_x] = median
         print(time.time() - start)
-        # cv2.imshow("edge", edge)
-        # cv2.imshow("swt", swt)
-        # cv2.waitKey(0)
-        # cv2.imwrite("edge.jpg", edges)
-        # cv2.imwrite("swt.jpg", swt * 128)
         swt[np.isinf(swt)] = 0
         return swt, edge
 
-    def cast_ray(self, start_x, start_y, theta, edge, max_length=50, direction=1):
+    def cast_ray(self, start_x, start_y, theta, edge, max_length=25, direction=1, epsilon=1):
+        ray = [(start_y, start_x)]
+        curr_x, curr_y = start_x, start_y
         ray_direction = theta[start_y][start_x]
+        base_ex, base_ey = np.cos(ray_direction), np.sin(ray_direction)
 
-        ray = [[start_y, start_x]]
         for ray_length in range(1, max_length):
-            next_x = math.floor(start_x + math.cos(ray_direction) * ray_length * direction)
-            next_y = math.floor(start_y + math.sin(ray_direction) * ray_length * direction)
+            next_x = math.floor(start_x - base_ex * ray_length * direction)
+            next_y = math.floor(start_y - base_ey * ray_length * direction)
+            if next_x == curr_x and next_y == curr_y:
+                continue
             if not self.is_valid_index(theta.shape, next_x, next_y):
-                return None
-            ray.append([next_y, next_x])
+                return None, None
+            ray.append((next_y, next_x))
+            curr_x, curr_y = next_x, next_y
             if edge[next_y][next_x] == 0:
                 continue
             opposite_direction = theta[next_y][next_x]
-            if abs(ray_direction - opposite_direction) > math.pi / 2:
-                return ray
-        return None
+            if math.pi - epsilon < abs(ray_direction - opposite_direction) < math.pi + epsilon:
+                return ray, ray_length
+        return None, None
 
-    # ToDo:Tooooooooo kate
+    # ToDo:Tooooooooo late
     def connect_components(self, swt):
         start = time.time()
         swt_coordinates = np.transpose(swt.nonzero())
@@ -163,23 +110,24 @@ class stroke_width_transform():
             swt_current = swt[current[0], current[1]]
             label = next_label
             for neighbor in neighbors:
-                if not self.is_valid_index(swt.shape[:2], neighbor[1], neighbor[0]):
+                if not self.is_valid_index(swt.shape, neighbor[1], neighbor[0]):
                     continue
                 if swt[neighbor] == 0:
                     continue
                 swt_neighbor = swt[neighbor]
-                if swt_neighbor / swt_current < ratio_threshold and swt_current / swt_neighbor < ratio_threshold:
+                if 1.0 / ratio_threshold < 1.0 * swt_neighbor / swt_current < ratio_threshold:
                     label = min(label_map[neighbor], label)
                     label_map[current[0], current[1]] = label
                     label_map[neighbor] = label
+        # labels = [(i, np.transpose(np.nonzero(label_map == i))) for i in range(1, next_label) if np.any(label_map == i)]
+        # """
         labels = dict([])
         for i in range(1, next_label):
-            if len(label_map[label_map == i]) == 0:
+            if np.all(label_map != i):
                 continue
             # labels[str(i)] = [(r, c) for r, c in np.transpose(np.nonzero(label_map == i))]
             labels[str(i)] = np.transpose(np.nonzero(label_map == i))
-
-            # print(np.transpose(np.nonzero(label_map == i)))
+        # """
         print(time.time() - start)
         return labels
 
@@ -191,7 +139,6 @@ class stroke_width_transform():
         widths = []
         topleft_pts = []
         images = []
-        mask_components = []
         for label, layer in shapes.items():
             # print(layer)
             ys, xs = np.transpose(layer)
@@ -204,12 +151,10 @@ class stroke_width_transform():
                 continue
             diameter = math.sqrt(width ** 2 + height ** 2)
             median_swt = np.median([swt[r, c] for r, c in layer])
-            # if diameter / median_swt > 10:
-            #     continue
+            if diameter / median_swt > 10:
+                continue
             if width / swt.shape[1] > 0.4 or height / swt.shape[0] > 0.4:
                 continue
-
-            mask_components.append([(r, c) for r, c in layer])
 
             # we use log_base_2 so we can do linear distance comparison later using k-d tree
             # ie, if log2(x) - log2(y) > 1, we know that x > 2*y
@@ -220,11 +165,32 @@ class stroke_width_transform():
             widths.append(width)
             images.append(layer)
         print(time.time() - start)
-        return mask_components
-        # return swts, heights, widths, topleft_pts, images
+        return swts, heights, widths, topleft_pts, images
+
+    @staticmethod
+    def find_words(swts, heights, widths, topleft_pts, images):
+        word_images = None
+        return word_images
 
 
 if __name__ == '__main__':
     img = cv2.imread("036.jpg", 1)
     tmp = stroke_width_transform()
-    tmp.run(img)
+    edge, mask = tmp.run(img)
+    # for component in mask_components:
+    #     mask = np.zeros(shape=swt.shape)
+    #     for r, c in component:
+    #         mask[r, c] = 255
+    #     cv2.imshow("masked", np.array([mask, mask, mask]).transpose((1, 2, 0)) * image)
+    #     cv2.waitKey(0)
+    chars = np.zeros(shape=img.shape, dtype=np.uint8)
+    for component in mask:
+        for r, c in component:
+            chars[r, c] = img[r, c]
+    cv2.imwrite("original.jpg", img)
+    cv2.imwrite("edge.jpg", edge)
+    cv2.imwrite("chars.jpg", chars)
+    cv2.imshow("image", img)
+    cv2.imshow("edge", edge)
+    cv2.imshow("chars", chars)
+    cv2.waitKey(0)
