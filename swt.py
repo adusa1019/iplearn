@@ -3,11 +3,11 @@
 import cv2
 import math
 import numpy as np
-from sklearn import neighbors
 import time
 
 
 class stroke_width_transform():
+
     def __init__(self):
         pass
 
@@ -19,7 +19,7 @@ class stroke_width_transform():
         swts, heights, widths, topleft_pts, images = self.find_letters(swt, connect_components)
         # 3. Grouping Letters into Text Lines
         word_images = self.find_words(swts, heights, widths, topleft_pts, images)
-        return edge, word_images
+        return edge, word_images, heights, widths, topleft_pts
 
     @staticmethod
     def get_derivative(image, low=100, high=300):
@@ -98,11 +98,14 @@ class stroke_width_transform():
         swt_coordinates = np.transpose(swt.nonzero())
         label_map = np.zeros(shape=swt.shape)
         next_label = 0
-        neighbors_coordinates = [[(y - 1, x - 1),  # northwest
-                                  (y - 1, x),  # north
-                                  (y - 1, x + 1),  # northeast
-                                  (y, x - 1)]  # west
-                                 for y, x in swt_coordinates]
+        neighbors_coordinates = [
+            [
+                (y - 1, x - 1),  # northwest
+                (y - 1, x),  # north
+                (y - 1, x + 1),  # northeast
+                (y, x - 1)  # west
+            ] for y, x in swt_coordinates
+        ]
         ratio_threshold = 3.0
         for current, neighbors in zip(swt_coordinates, neighbors_coordinates):
             next_label += 1
@@ -149,10 +152,10 @@ class stroke_width_transform():
                 continue
             if width / height > 10 or height / width > 10:
                 continue
-            diameter = math.sqrt(width ** 2 + height ** 2)
+            diameter = math.sqrt(width**2 + height**2)
             median_swt = np.median([swt[r, c] for r, c in layer])
-            if diameter / median_swt > 10:
-                continue
+            # if diameter / median_swt > 10:
+            #     continue
             if width / swt.shape[1] > 0.4 or height / swt.shape[0] > 0.4:
                 continue
 
@@ -170,7 +173,7 @@ class stroke_width_transform():
     @staticmethod
     def find_words(swts, heights, widths, topleft_pts, images):
         word_images = None
-        return word_images
+        return word_images or images
 
 
 if __name__ == '__main__':
